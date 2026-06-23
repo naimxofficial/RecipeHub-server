@@ -35,7 +35,9 @@ async function run() {
 
     const db = client.db("recipehub");
     const recipesCollection = db.collection("recipes");
-
+    const likesCollection = db.collection("likes");
+    const favoritesCollection = db.collection("favorites");
+    const reportsCollection = db.collection("reports");
 
     // Health check
     app.get("/", (req, res) => {
@@ -335,7 +337,7 @@ async function run() {
 
 
 
-    
+
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
