@@ -38,6 +38,7 @@ async function run() {
     const likesCollection = db.collection("likes");
     const favoritesCollection = db.collection("favorites");
     const reportsCollection = db.collection("reports");
+    const usersCollection = db.collection("users");
 
     // Health check
     app.get("/", (req, res) => {
@@ -335,6 +336,92 @@ async function run() {
     });
 
 
+    // POST /recipes
+    // Body: { recipeName, recipeImage, category, cuisineType, difficultyLevel, preparationTime, ingredients,instructions, price, authorId, authorName, authorEmail }
+    // Enforces 2-recipe limit for free (non-premium) users
+    // Returns: { success: true, recipeId }
+    app.post("/recipes", async (req, res) => {
+      try {
+        const {
+          recipeName,
+          recipeImage,
+          category,
+          cuisineType,
+          difficultyLevel,
+          preparationTime,
+          ingredients,
+          instructions,
+          price,
+          authorId,
+          authorName,
+          authorEmail,
+          isPremium,
+        } = req.body;
+
+        // Basic validation
+        if (
+          !recipeName || !recipeImage || !category || !cuisineType ||
+          !difficultyLevel || !preparationTime || !authorId ||
+          !Array.isArray(ingredients) || ingredients.length === 0 ||
+          !Array.isArray(instructions) || instructions.length === 0
+        ) {
+          return res.status(400).json({ error: "All fields are required" });
+        }
+
+        // Enforce 2-recipe limit for free users
+        if (!isPremium) {
+          const existingCount = await recipesCollection.countDocuments({ authorId });
+          if (existingCount >= 2) {
+            return res.status(403).json({
+              error: "Free users can only add 2 recipes. Upgrade to Premium for unlimited recipes.",
+              limitReached: true,
+            });
+          }
+        }
+
+        const now = new Date();
+        const result = await recipesCollection.insertOne({
+          recipeName,
+          recipeImage,
+          category,
+          cuisineType,
+          difficultyLevel,
+          preparationTime,
+          ingredients,
+          instructions,
+          price: parseFloat(price) || 0,
+          authorId,
+          authorName,
+          authorEmail,
+          likesCount: 0,
+          isFeatured: false,
+          status: "active",
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        res.status(201).json({ success: true, recipeId: result.insertedId });
+      } catch (err) {
+        console.error("POST /recipes error:", err);
+        res.status(500).json({ error: "Failed to create recipe" });
+      }
+    });
+
+
+    // GET /users/:id/premium-status
+    // Returns: { isPremium: bool }
+    app.get("/users/:id/premium-status", async (req, res) => {
+      try {
+        const user = await usersCollection.findOne(
+          { id: req.params.id },
+          { projection: { isPremium: 1 } }
+        );
+        res.json({ isPremium: user?.isPremium ?? false });
+      } catch (err) {
+        console.error("GET /users/:id/premium-status error:", err);
+        res.status(500).json({ error: "Failed to fetch premium status" });
+      }
+    });
 
 
 
