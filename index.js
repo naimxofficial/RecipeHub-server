@@ -145,6 +145,198 @@ async function run() {
     });
 
 
+    // POST /recipes/:id/like
+    // Body: { userId, userEmail }
+    // Toggles like — increments or decrements likesCount
+    // Returns: { liked: bool, likesCount: number }
+    app.post("/recipes/:id/like", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+        const { userId, userEmail } = req.body;
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorised" });
+        }
+
+        const recipeId = req.params.id;
+        const existing = await likesCollection.findOne({ recipeId, userId });
+
+        let liked;
+        if (existing) {
+          // Unlike
+          await likesCollection.deleteOne({ recipeId, userId });
+          await recipesCollection.updateOne(
+            { _id: new ObjectId(recipeId) },
+            { $inc: { likesCount: -1 } }
+          );
+          liked = false;
+        } else {
+          // Like
+          await likesCollection.insertOne({
+            recipeId,
+            userId,
+            userEmail,
+            likedAt: new Date(),
+          });
+          await recipesCollection.updateOne(
+            { _id: new ObjectId(recipeId) },
+            { $inc: { likesCount: 1 } }
+          );
+          liked = true;
+        }
+
+        const updated = await recipesCollection.findOne(
+          { _id: new ObjectId(recipeId) },
+          { projection: { likesCount: 1 } }
+        );
+
+        res.json({ liked, likesCount: updated.likesCount });
+      } catch (err) {
+        console.error("POST /recipes/:id/like error:", err);
+        res.status(500).json({ error: "Failed to toggle like" });
+      }
+    });
+
+
+    // GET /recipes/:id/like-status?userId=xxx
+    // Returns: { liked: bool, likesCount: number }
+    app.get("/recipes/:id/like-status", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+        const { userId } = req.query;
+        const recipeId = req.params.id;
+
+        const [existing, recipe] = await Promise.all([
+          userId ? likesCollection.findOne({ recipeId, userId }) : null,
+          recipesCollection.findOne(
+            { _id: new ObjectId(recipeId) },
+            { projection: { likesCount: 1 } }
+          ),
+        ]);
+
+        res.json({
+          liked: !!existing,
+          likesCount: recipe?.likesCount ?? 0,
+        });
+      } catch (err) {
+        console.error("GET /recipes/:id/like-status error:", err);
+        res.status(500).json({ error: "Failed to fetch like status" });
+      }
+    });
+
+
+    // POST /recipes/:id/favorite
+    // Body: { userId, userEmail }
+    // Toggles favorite in favorites collection
+    // Returns: { favorited: bool }
+    app.post("/recipes/:id/favorite", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+        const { userId, userEmail } = req.body;
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorised" });
+        }
+
+        const recipeId = req.params.id;
+        const existing = await favoritesCollection.findOne({ recipeId, userId });
+
+        let favorited;
+        if (existing) {
+          await favoritesCollection.deleteOne({ recipeId, userId });
+          favorited = false;
+        } else {
+          await favoritesCollection.insertOne({
+            recipeId,
+            userId,
+            userEmail,
+            addedAt: new Date(),
+          });
+          favorited = true;
+        }
+
+        res.json({ favorited });
+      } catch (err) {
+        console.error("POST /recipes/:id/favorite error:", err);
+        res.status(500).json({ error: "Failed to toggle favorite" });
+      }
+    });
+
+
+    // GET /recipes/:id/favorite-status?userId=xxx
+    // Returns: { favorited: bool }
+    app.get("/recipes/:id/favorite-status", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+        const { userId } = req.query;
+        if (!userId) return res.json({ favorited: false });
+
+        const existing = await favoritesCollection.findOne({
+          recipeId: req.params.id,
+          userId,
+        });
+        res.json({ favorited: !!existing });
+      } catch (err) {
+        console.error("GET /recipes/:id/favorite-status error:", err);
+        res.status(500).json({ error: "Failed to fetch favorite status" });
+      }
+    });
+
+
+    // POST /recipes/:id/report
+    // Body: { reporterEmail, reason }
+    // Saves report to reports collection
+    // Returns: { success: bool }
+    app.post("/recipes/:id/report", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+        const { reporterEmail, reason } = req.body;
+        if (!reporterEmail || !reason) {
+          return res.status(400).json({ error: "Email and reason are required" });
+        }
+
+        const VALID_REASONS = ["Spam", "Offensive Content", "Copyright Issue"];
+        if (!VALID_REASONS.includes(reason)) {
+          return res.status(400).json({ error: "Invalid report reason" });
+        }
+
+        // Prevent duplicate reports from same user on same recipe
+        const existing = await reportsCollection.findOne({
+          recipeId: req.params.id,
+          reporterEmail,
+        });
+        if (existing) {
+          return res.status(409).json({ error: "You already reported this recipe" });
+        }
+
+        await reportsCollection.insertOne({
+          recipeId: req.params.id,
+          reporterEmail,
+          reason,
+          status: "pending",
+          createdAt: new Date(),
+        });
+
+        res.json({ success: true });
+      } catch (err) {
+        console.error("POST /recipes/:id/report error:", err);
+        res.status(500).json({ error: "Failed to submit report" });
+      }
+    });
+
+
+
+
+    
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
