@@ -53,7 +53,7 @@ async function run() {
       try {
         const recipes = await recipesCollection
           .find({ isFeatured: true, status: "active" })
-          .limit(4)
+          .limit(8)
           .toArray();
         res.json(recipes);
       } catch (err) {
@@ -448,8 +448,7 @@ async function run() {
     });
 
 
-    // PUT /recipes/:id
-    // Update a recipe (only owner can update)
+    // PUT /recipes/:id  (Update Recipe)
     app.put("/recipes/:id", async (req, res) => {
       try {
         const { userId } = req.query;
@@ -458,10 +457,25 @@ async function run() {
         }
 
         const updateData = req.body;
-        delete updateData._id; // Prevent updating _id
+        delete updateData._id;
+
+        // Check if user is admin
+        const adminUser = await usersCollection.findOne({
+          _id: new ObjectId(userId),
+          role: "admin"
+        });
+
+        let filter;
+        if (adminUser) {
+          // Admin can edit any recipe
+          filter = { _id: new ObjectId(req.params.id) };
+        } else {
+          // Normal user can only edit their own recipe
+          filter = { _id: new ObjectId(req.params.id), authorId: userId };
+        }
 
         const result = await recipesCollection.updateOne(
-          { _id: new ObjectId(req.params.id), authorId: userId },
+          filter,
           { $set: { ...updateData, updatedAt: new Date() } }
         );
 
@@ -839,7 +853,108 @@ async function run() {
     });
 
 
-    
+    // GET /admin/recipes
+    // Returns all recipes for admin panel
+    app.get("/admin/recipes", async (req, res) => {
+      try {
+        const { userId } = req.query;
+
+        // Verify admin
+        const adminUser = await usersCollection.findOne({ _id: new ObjectId(userId) });
+        if (!adminUser || adminUser.role !== "admin") {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        const recipes = await recipesCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.json({ recipes });
+      } catch (err) {
+        console.error("GET /admin/recipes error:", err);
+        res.status(500).json({ error: "Failed to fetch recipes" });
+      }
+    });
+
+
+    // PATCH /admin/recipes/:id/feature
+    // Toggle featured status
+    app.patch("/admin/recipes/:id/feature", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        const { id } = req.params;
+        const { isFeatured } = req.body;
+
+        // Verify admin
+        const adminUser = await usersCollection.findOne({ _id: new ObjectId(userId) });
+        if (!adminUser || adminUser.role !== "admin") {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isFeatured: !!isFeatured, updatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "Recipe not found" });
+        }
+
+        res.json({
+          success: true,
+          message: `Recipe ${isFeatured ? "featured" : "unfeatured"} successfully`
+        });
+      } catch (err) {
+        console.error("PATCH /admin/recipes/:id/feature error:", err);
+        res.status(500).json({ error: "Failed to update featured status" });
+      }
+    });
+
+
+    // DELETE /admin/recipes/:id
+    // Admin can delete any recipe
+    app.delete("/admin/recipes/:id", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        const { id } = req.params;
+
+        // Verify admin
+        const adminUser = await usersCollection.findOne({ _id: new ObjectId(userId) });
+        if (!adminUser || adminUser.role !== "admin") {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid recipe ID" });
+        }
+
+        const result = await recipesCollection.deleteOne({ _id: new ObjectId(id) });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Recipe not found" });
+        }
+
+        // Clean up related data
+        await Promise.all([
+          likesCollection.deleteMany({ recipeId: id }),
+          favoritesCollection.deleteMany({ recipeId: id }),
+          reportsCollection.deleteMany({ recipeId: id }),
+        ]);
+
+        res.json({ success: true, message: "Recipe deleted successfully" });
+      } catch (err) {
+        console.error("DELETE /admin/recipes/:id error:", err);
+        res.status(500).json({ error: "Failed to delete recipe" });
+      }
+    });
+
+
+
 
 
     app.listen(PORT, () => {
