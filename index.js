@@ -424,6 +424,89 @@ async function run() {
     });
 
 
+    // GET /my-recipes
+    // Returns all recipes created by the logged-in user
+    app.get("/my-recipes", async (req, res) => {
+      try {
+        const { userId, userEmail } = req.query;
+
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        const recipes = await recipesCollection
+          .find({ authorId: userId })
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.json(recipes);
+      } catch (err) {
+        console.error("GET /my-recipes error:", err);
+        res.status(500).json({ error: "Failed to fetch your recipes" });
+      }
+    });
+
+
+    // PUT /recipes/:id
+    // Update a recipe (only owner can update)
+    app.put("/recipes/:id", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        if (!userId || !ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid request" });
+        }
+
+        const updateData = req.body;
+        delete updateData._id; // Prevent updating _id
+
+        const result = await recipesCollection.updateOne(
+          { _id: new ObjectId(req.params.id), authorId: userId },
+          { $set: { ...updateData, updatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(403).json({ error: "Recipe not found or unauthorized" });
+        }
+
+        res.json({ success: true, message: "Recipe updated successfully" });
+      } catch (err) {
+        console.error("PUT /recipes/:id error:", err);
+        res.status(500).json({ error: "Failed to update recipe" });
+      }
+    });
+
+
+    // DELETE /recipes/:id
+    // Delete a recipe (only owner can delete)
+    app.delete("/recipes/:id", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        if (!userId || !ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid request" });
+        }
+
+        const result = await recipesCollection.deleteOne({
+          _id: new ObjectId(req.params.id),
+          authorId: userId,
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(403).json({ error: "Recipe not found or unauthorized" });
+        }
+
+        //  Also clean up related likes/favorites/reports
+        await Promise.all([
+          likesCollection.deleteMany({ recipeId: req.params.id }),
+          favoritesCollection.deleteMany({ recipeId: req.params.id }),
+          reportsCollection.deleteMany({ recipeId: req.params.id }),
+        ]);
+
+        res.json({ success: true, message: "Recipe deleted successfully" });
+      } catch (err) {
+        console.error("DELETE /recipes/:id error:", err);
+        res.status(500).json({ error: "Failed to delete recipe" });
+      }
+    });
 
 
     app.listen(PORT, () => {
