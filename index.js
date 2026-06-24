@@ -38,7 +38,7 @@ async function run() {
     const likesCollection = db.collection("likes");
     const favoritesCollection = db.collection("favorites");
     const reportsCollection = db.collection("reports");
-    const usersCollection = db.collection("users");
+    const usersCollection = db.collection("user");
     const paymentsCollection = db.collection("payments");
 
     // Health check
@@ -637,9 +637,100 @@ async function run() {
     });
 
 
+    // GET /profile
+    app.get("/profile", async (req, res) => {
+      try {
+        const { userId } = req.query;
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized - No userId provided" });
+        }
+
+        let user = null;
+
+        // Try as ObjectId
+        if (ObjectId.isValid(userId)) {
+          user = await usersCollection.findOne(
+            { _id: new ObjectId(userId) },
+            { projection: { name: 1, email: 1, image: 1, createdAt: 1, isPremium: 1, role: 1 } }
+          );
+        }
+
+        // Fallback
+        if (!user) {
+          user = await usersCollection.findOne(
+            { id: userId },
+            { projection: { name: 1, email: 1, image: 1, createdAt: 1, isPremium: 1, role: 1 } }
+          );
+        }
+
+        if (!user) {
+          console.log("❌ User not found with ID:", userId);
+          return res.status(404).json({
+            error: "User not found",
+            userIdReceived: userId
+          });
+        }
+
+        console.log("✅ User found:", user.name);
+        res.json(user);
+      } catch (err) {
+        console.error("GET /profile error:", err);
+        res.status(500).json({ error: "Failed to fetch profile" });
+      }
+    });
 
 
-    
+    // PUT /profile
+    app.put("/profile", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        const { name, image } = req.body;
+
+        console.log("🔄 Profile PUT - Received userId:", userId);
+
+        if (!userId) {
+          return res.status(401).json({ error: "Unauthorized - No userId provided" });
+        }
+
+        if (!name?.trim()) {
+          return res.status(400).json({ error: "Name is required" });
+        }
+
+        const updateData = {
+          name: name.trim(),
+          updatedAt: new Date()
+        };
+        if (image) updateData.image = image;
+
+        const result = await usersCollection.updateOne(
+          {
+            $or: [
+              { _id: ObjectId.isValid(userId) ? new ObjectId(userId) : null },
+              { id: userId }
+            ]
+          },
+          { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({
+            error: "User not found",
+            userIdReceived: userId
+          });
+        }
+
+        console.log("✅ Profile updated successfully");
+        res.json({ success: true, message: "Profile updated successfully" });
+      } catch (err) {
+        console.error("PUT /profile error:", err);
+        res.status(500).json({ error: "Failed to update profile" });
+      }
+    });
+
+
+
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
