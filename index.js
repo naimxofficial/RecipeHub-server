@@ -777,8 +777,70 @@ async function run() {
     });
 
 
+    // GET /admin/users
+    // Returns all users for admin panel
+    app.get("/admin/users", async (req, res) => {
+      try {
+        const { userId } = req.query; // to verify admin
+
+        const adminUser = await usersCollection.findOne({ _id: new ObjectId(userId) });
+        if (!adminUser || adminUser.role !== "admin") {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        const users = await usersCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .toArray();
+
+        res.json({ users });
+      } catch (err) {
+        console.error("GET /admin/users error:", err);
+        res.status(500).json({ error: "Failed to fetch users" });
+      }
+    });
+
+
+    // PATCH /admin/users/:id/block
+    // Toggle block/unblock status
+    app.patch("/admin/users/:id/block", async (req, res) => {
+      try {
+        const { userId: adminId } = req.query;
+        const { id } = req.params;
+        const { isBlocked } = req.body;
+
+        // Verify admin
+        const adminUser = await usersCollection.findOne({ _id: new ObjectId(adminId) });
+        if (!adminUser || adminUser.role !== "admin") {
+          return res.status(403).json({ error: "Admin access required" });
+        }
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid user ID" });
+        }
+
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { isBlocked: !!isBlocked, updatedAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res.status(404).json({ error: "User not found" });
+        }
+
+        res.json({
+          success: true,
+          message: `User ${isBlocked ? "blocked" : "unblocked"} successfully`
+        });
+      } catch (err) {
+        console.error("PATCH /admin/users/:id/block error:", err);
+        res.status(500).json({ error: "Failed to update user status" });
+      }
+    });
+
 
     
+
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
