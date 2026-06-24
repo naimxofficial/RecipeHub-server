@@ -729,7 +729,56 @@ async function run() {
     });
 
 
+    // GET /admin/stats
+    // Returns platform-wide counts for the admin overview
+    // Returns: { totalUsers, totalRecipes, totalPremium, totalReports }
+    app.get("/admin/stats", async (req, res) => {
+      try {
+        const [totalUsers, totalRecipes, totalPremium, totalReports] =
+          await Promise.all([
+            usersCollection.countDocuments({}),
+            recipesCollection.countDocuments({}),
+            usersCollection.countDocuments({ isPremium: true }),
+            reportsCollection.countDocuments({ status: "pending" }),
+          ]);
 
+        res.json({ totalUsers, totalRecipes, totalPremium, totalReports });
+      } catch (err) {
+        console.error("GET /admin/stats error:", err);
+        res.status(500).json({ error: "Failed to fetch admin stats" });
+      }
+    });
+
+
+    // GET /admin/recent-activity
+    // Returns last 5 users + last 5 recipes for the admin overview
+    app.get("/admin/recent-activity", async (req, res) => {
+      try {
+        const [recentUsers, recentRecipes] = await Promise.all([
+          usersCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .project({ name: 1, email: 1, role: 1, isPremium: 1, isBlocked: 1, createdAt: 1 })
+            .toArray(),
+          recipesCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .limit(5)
+            .project({ recipeName: 1, category: 1, authorName: 1, likesCount: 1, isFeatured: 1, createdAt: 1 })
+            .toArray(),
+        ]);
+
+        res.json({ recentUsers, recentRecipes });
+      } catch (err) {
+        console.error("GET /admin/recent-activity error:", err);
+        res.status(500).json({ error: "Failed to fetch recent activity" });
+      }
+    });
+
+
+
+    
 
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
