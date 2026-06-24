@@ -39,6 +39,7 @@ async function run() {
     const favoritesCollection = db.collection("favorites");
     const reportsCollection = db.collection("reports");
     const usersCollection = db.collection("users");
+    const paymentsCollection = db.collection("payments");
 
     // Health check
     app.get("/", (req, res) => {
@@ -584,9 +585,61 @@ async function run() {
     });
 
 
+    // GET /purchased
+    // Returns all recipes purchased by the current user
+    app.get("/purchased", async (req, res) => {
+      try {
+        const { userId, userEmail } = req.query;
+
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        // Get payment records for this user
+        const payments = await paymentsCollection
+          .find({
+            userId,
+            paymentStatus: "succeeded"
+          })
+          .sort({ paidAt: -1 })
+          .toArray();
+
+        if (payments.length === 0) {
+          return res.json({ purchases: [] });
+        }
+
+        // Get full recipe details
+        const recipeIds = payments.map(p => new ObjectId(p.recipeId));
+
+        const recipes = await recipesCollection
+          .find({
+            _id: { $in: recipeIds },
+            status: "active"
+          })
+          .toArray();
+
+        // Merge payment info with recipe data
+        const purchases = recipes.map(recipe => {
+          const payment = payments.find(p => p.recipeId === recipe._id.toString());
+          return {
+            ...recipe,
+            purchasedAt: payment?.paidAt,
+            transactionId: payment?.transactionId,
+            amount: payment?.amount
+          };
+        });
+
+        res.json({ purchases });
+      } catch (err) {
+        console.error("GET /purchased error:", err);
+        res.status(500).json({ error: "Failed to fetch purchased recipes" });
+      }
+    });
 
 
 
+
+    
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
