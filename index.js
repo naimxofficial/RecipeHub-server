@@ -509,6 +509,84 @@ async function run() {
     });
 
 
+    // GET /favorites
+    // Returns all recipes favorited by the current user
+    app.get("/favorites", async (req, res) => {
+      try {
+        const { userId, userEmail } = req.query;
+
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+
+        // Get favorite records
+        const favorites = await favoritesCollection
+          .find({ userId })
+          .sort({ addedAt: -1 })
+          .toArray();
+
+        if (favorites.length === 0) {
+          return res.json({ favorites: [] });
+        }
+
+        // Get full recipe details
+        const recipeIds = favorites.map(f => new ObjectId(f.recipeId));
+
+        const recipes = await recipesCollection
+          .find({
+            _id: { $in: recipeIds },
+            status: "active"
+          })
+          .toArray();
+
+        // Merge favorite info with recipe data
+        const result = recipes.map(recipe => {
+          const fav = favorites.find(f => f.recipeId === recipe._id.toString());
+          return {
+            ...recipe,
+            favoritedAt: fav?.addedAt
+          };
+        });
+
+        res.json({ favorites: result });
+      } catch (err) {
+        console.error("GET /favorites error:", err);
+        res.status(500).json({ error: "Failed to fetch favorites" });
+      }
+    });
+
+
+    // DELETE /favorites/:recipeId
+    // Remove a recipe from favorites
+    app.delete("/favorites/:recipeId", async (req, res) => {
+      try {
+        const { userId } = req.query;
+        const { recipeId } = req.params;
+
+        if (!userId || !ObjectId.isValid(recipeId)) {
+          return res.status(400).json({ error: "Invalid request" });
+        }
+
+        const result = await favoritesCollection.deleteOne({
+          recipeId,
+          userId
+        });
+
+        if (result.deletedCount === 0) {
+          return res.status(404).json({ error: "Favorite not found" });
+        }
+
+        res.json({ success: true, message: "Removed from favorites" });
+      } catch (err) {
+        console.error("DELETE /favorites/:recipeId error:", err);
+        res.status(500).json({ error: "Failed to remove favorite" });
+      }
+    });
+
+
+
+
+
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
