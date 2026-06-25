@@ -6,12 +6,15 @@ const dotenv = require("dotenv");
 const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 
+
 dotenv.config();
 
 const uri = process.env.MONGODB_URI;
 const PORT = process.env.PORT;
 
 const app = express();
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 app.use(cors({
   origin: process.env.CLIENT_URL,
@@ -356,10 +359,8 @@ async function run() {
           authorId,
           authorName,
           authorEmail,
-          isPremium,
         } = req.body;
 
-        // Basic validation
         if (
           !recipeName || !recipeImage || !category || !cuisineType ||
           !difficultyLevel || !preparationTime || !authorId ||
@@ -367,6 +368,16 @@ async function run() {
           !Array.isArray(instructions) || instructions.length === 0
         ) {
           return res.status(400).json({ error: "All fields are required" });
+        }
+
+
+        let isPremium = false;
+        if (authorId) {
+          const user = await usersCollection.findOne(
+            { $or: [{ _id: new ObjectId(authorId) }, { id: authorId }] },
+            { projection: { isPremium: 1 } }
+          );
+          isPremium = user?.isPremium ?? false;
         }
 
         // Enforce 2-recipe limit for free users
@@ -401,7 +412,11 @@ async function run() {
           updatedAt: now,
         });
 
-        res.status(201).json({ success: true, recipeId: result.insertedId });
+        res.status(201).json({
+          success: true,
+          recipeId: result.insertedId,
+          message: isPremium ? "Recipe added successfully (Premium)" : "Recipe added successfully (2/2 limit)"
+        });
       } catch (err) {
         console.error("POST /recipes error:", err);
         res.status(500).json({ error: "Failed to create recipe" });
@@ -413,13 +428,16 @@ async function run() {
     // Returns: { isPremium: bool }
     app.get("/users/:id/premium-status", async (req, res) => {
       try {
+        const { id } = req.params;
+
         const user = await usersCollection.findOne(
-          { id: req.params.id },
+          { $or: [{ _id: new ObjectId(id) }, { id }] },
           { projection: { isPremium: 1 } }
         );
+
         res.json({ isPremium: user?.isPremium ?? false });
       } catch (err) {
-        console.error("GET /users/:id/premium-status error:", err);
+        console.error(err);
         res.status(500).json({ error: "Failed to fetch premium status" });
       }
     });
@@ -1105,6 +1123,121 @@ async function run() {
       } catch (err) {
         console.error("GET /admin/transactions error:", err);
         res.status(500).json({ error: "Failed to fetch transactions" });
+      }
+    });
+
+
+    // POST /payments/create-premium-checkout
+    // Body: { userId, userEmail }
+    // Creates a Stripe Checkout session for one-time premium purchase
+    app.post("/payments/create-premium-checkout", async (req, res) => {
+      try {
+        const { userId, userEmail } = req.body;
+        if (!userId || !userEmail) {
+          return res.status(401).json({ error: "Unauthorised" });
+        }
+
+        // Prevent buying premium twice
+        const user = await usersCollection.findOne({ id: userId });
+        if (user?.isPremium) {
+          return res.status(400).json({ error: "Already a premium member" });
+        }
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          mode: "payment",
+          customer_email: userEmail,
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                unit_amount: parseInt(process.env.STRIPE_PREMIUM_PRICE_CENTS) || 999,
+                product_data: {
+                  name: "RecipeHub Premium",
+                  description: "Lifetime premium membership — unlimited recipes & premium badge",
+                },
+              },
+              quantity: 1,
+            },
+          ],
+          metadata: { userId, userEmail, type: "premium" },
+          success_url: `${process.env.CLIENT_URL}/dashboard/premium/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_URL}/dashboard/premium`,
+        });
+
+        res.json({ url: session.url });
+      } catch (err) {
+        console.error("POST /payments/create-premium-checkout error:", err);
+        res.status(500).json({ error: "Failed to create checkout session" });
+      }
+    });
+
+
+    // GET /payments/verify-premium?session_id=xxx
+    app.get("/payments/verify-premium", async (req, res) => {
+      try {
+        const { session_id } = req.query;
+        if (!session_id) {
+          return res.status(400).json({ error: "Missing session_id" });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(session_id);
+
+        if (session.payment_status !== "paid") {
+          return res.status(402).json({ error: "Payment not completed" });
+        }
+
+        const { userId, userEmail } = session.metadata;
+
+        if (!userId) {
+          return res.status(400).json({ error: "Missing userId in metadata" });
+        }
+
+
+        const updateResult = await usersCollection.updateOne(
+          {
+            $or: [
+              { _id: new ObjectId(userId) },
+              { id: userId }
+            ]
+          },
+          {
+            $set: {
+              isPremium: true,
+              updatedAt: new Date()
+            }
+          }
+        );
+
+        if (updateResult.matchedCount === 0) {
+          console.error("User not found for premium upgrade:", userId);
+          return res.status(404).json({ error: "User not found" });
+        }
+
+        console.log(`✅ Premium upgraded for user: ${userId}`);
+
+        // Save payment record
+        const existing = await paymentsCollection.findOne({
+          transactionId: session.payment_intent,
+        });
+
+        if (!existing) {
+          await paymentsCollection.insertOne({
+            userId,
+            userEmail,
+            amount: session.amount_total / 100,
+            recipeId: null,
+            transactionId: session.payment_intent,
+            paymentStatus: "succeeded",
+            type: "premium",
+            paidAt: new Date(),
+          });
+        }
+
+        res.json({ success: true, message: "Premium membership activated" });
+      } catch (err) {
+        console.error("GET /payments/verify-premium error:", err);
+        res.status(500).json({ error: "Failed to verify payment" });
       }
     });
 
