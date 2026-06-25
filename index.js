@@ -1242,6 +1242,122 @@ async function run() {
     });
 
 
+    // POST /payments/create-recipe-checkout
+    // Body: { userId, userEmail, recipeId }
+    // Creates Stripe Checkout session for buying a single recipe
+    app.post("/payments/create-recipe-checkout", async (req, res) => {
+      try {
+        const { userId, userEmail, recipeId } = req.body;
+
+        if (!userId || !userEmail || !recipeId) {
+          return res.status(400).json({ error: "Missing required fields" });
+        }
+
+        // Verify recipe exists and is active
+        const recipe = await recipesCollection.findOne(
+          { _id: new ObjectId(recipeId), status: "active" }
+        );
+
+        if (!recipe) {
+          return res.status(404).json({ error: "Recipe not found" });
+        }
+
+        // Prevent buying the same recipe twice
+        const existingPurchase = await paymentsCollection.findOne({
+          userId,
+          recipeId,
+          paymentStatus: "succeeded"
+        });
+
+        if (existingPurchase) {
+          return res.status(400).json({ error: "You already own this recipe" });
+        }
+
+        const session = await stripe.checkout.sessions.create({
+          payment_method_types: ["card"],
+          mode: "payment",
+          customer_email: userEmail,
+          line_items: [
+            {
+              price_data: {
+                currency: "usd",
+                unit_amount: Math.round(recipe.price * 100) || 499, // fallback $4.99
+                product_data: {
+                  name: recipe.recipeName,
+                  description: `Recipe by ${recipe.authorName}`,
+                  images: recipe.recipeImage ? [recipe.recipeImage] : [],
+                },
+              },
+              quantity: 1,
+            },
+          ],
+          metadata: {
+            userId,
+            userEmail,
+            recipeId,
+            type: "recipe"
+          },
+          success_url: `${process.env.CLIENT_URL}/recipes/${recipeId}/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${process.env.CLIENT_URL}/recipes/${recipeId}`,
+        });
+
+        res.json({ url: session.url });
+      } catch (err) {
+        console.error("POST /payments/create-recipe-checkout error:", err);
+        res.status(500).json({ error: "Failed to create checkout session" });
+      }
+    });
+
+    
+    // GET /payments/verify-recipe?session_id=xxx
+    // Called after successful payment to mark recipe as purchased
+    app.get("/payments/verify-recipe", async (req, res) => {
+      try {
+        const { session_id } = req.query;
+        if (!session_id) {
+          return res.status(400).json({ error: "Missing session_id" });
+        }
+
+        const session = await stripe.checkout.sessions.retrieve(session_id);
+
+        if (session.payment_status !== "paid") {
+          return res.status(402).json({ error: "Payment not completed" });
+        }
+
+        const { userId, userEmail, recipeId, type } = session.metadata;
+
+        if (type !== "recipe" || !recipeId) {
+          return res.status(400).json({ error: "Invalid purchase type" });
+        }
+
+        // Save payment record
+        const existing = await paymentsCollection.findOne({
+          transactionId: session.payment_intent,
+        });
+
+        if (!existing) {
+          await paymentsCollection.insertOne({
+            userId,
+            userEmail,
+            amount: session.amount_total / 100,
+            recipeId,
+            transactionId: session.payment_intent,
+            paymentStatus: "succeeded",
+            type: "recipe",
+            paidAt: new Date(),
+          });
+        }
+
+        res.json({ success: true, message: "Recipe purchased successfully" });
+      } catch (err) {
+        console.error("GET /payments/verify-recipe error:", err);
+        res.status(500).json({ error: "Failed to verify payment" });
+      }
+    });
+
+
+
+    
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
