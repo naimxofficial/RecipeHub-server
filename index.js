@@ -954,9 +954,111 @@ async function run() {
     });
 
 
+    // GET /admin/reports
+    // Returns all reports with pagination, joined with recipe name
+    app.get("/admin/reports", async (req, res) => {
+      try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = 10;
+        const skip = (page - 1) * limit;
+        const status = req.query.status || "pending"; // pending | dismissed | all
+
+        const filter = status === "all" ? {} : { status };
+
+        const [totalCount, reports] = await Promise.all([
+          reportsCollection.countDocuments(filter),
+          reportsCollection
+            .find(filter)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray(),
+        ]);
+
+        // Attach recipe names
+        const recipeIds = [...new Set(reports.map((r) => r.recipeId))]
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const recipes = recipeIds.length
+          ? await recipesCollection
+            .find({ _id: { $in: recipeIds } })
+            .project({ recipeName: 1 })
+            .toArray()
+          : [];
+
+        const recipeMap = Object.fromEntries(
+          recipes.map((r) => [r._id.toString(), r.recipeName])
+        );
+
+        const enriched = reports.map((r) => ({
+          ...r,
+          recipeName: recipeMap[r.recipeId] ?? "Deleted recipe",
+        }));
+
+        res.json({ reports: enriched, totalCount, page, totalPages: Math.ceil(totalCount / limit) });
+      } catch (err) {
+        console.error("GET /admin/reports error:", err);
+        res.status(500).json({ error: "Failed to fetch reports" });
+      }
+    });
+
+
+    // PATCH /admin/reports/:id/dismiss
+    // Marks a single report as dismissed
+    app.patch("/admin/reports/:id/dismiss", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid report ID" });
+        }
+        await reportsCollection.updateOne(
+          { _id: new ObjectId(req.params.id) },
+          { $set: { status: "dismissed" } }
+        );
+        res.json({ success: true });
+      } catch (err) {
+        console.error("PATCH /admin/reports/:id/dismiss error:", err);
+        res.status(500).json({ error: "Failed to dismiss report" });
+      }
+    });
+
+
+    // DELETE /admin/reports/:id/remove-recipe
+    // Removes the recipe + cleans up ALL reports, likes, favorites for that recipe
+    app.delete("/admin/reports/:id/remove-recipe", async (req, res) => {
+      try {
+        if (!ObjectId.isValid(req.params.id)) {
+          return res.status(400).json({ error: "Invalid report ID" });
+        }
+        // Find the report to get recipeId
+        const report = await reportsCollection.findOne({
+          _id: new ObjectId(req.params.id),
+        });
+        if (!report) return res.status(404).json({ error: "Report not found" });
+
+        const recipeId = report.recipeId;
+
+        // Delete recipe + all related data in parallel
+        await Promise.all([
+          ObjectId.isValid(recipeId)
+            ? recipesCollection.deleteOne({ _id: new ObjectId(recipeId) })
+            : Promise.resolve(),
+          reportsCollection.deleteMany({ recipeId }),
+          likesCollection.deleteMany({ recipeId }),
+          favoritesCollection.deleteMany({ recipeId }),
+        ]);
+
+        res.json({ success: true });
+      } catch (err) {
+        console.error("DELETE /admin/reports/:id/remove-recipe error:", err);
+        res.status(500).json({ error: "Failed to remove recipe" });
+      }
+    });
 
 
 
+
+    
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
