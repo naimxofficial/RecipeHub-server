@@ -1056,9 +1056,59 @@ async function run() {
     });
 
 
+    // GET /admin/transactions?page=1
+    // Returns paginated payments collection
+    app.get("/admin/transactions", async (req, res) => {
+      try {
+        const page = Math.max(1, parseInt(req.query.page) || 1);
+        const limit = 10;
+        const skip = (page - 1) * limit;
+
+        const [totalCount, transactions] = await Promise.all([
+          paymentsCollection.countDocuments({}),
+          paymentsCollection
+            .find({})
+            .sort({ paidAt: -1 })
+            .skip(skip)
+            .limit(limit)
+            .toArray(),
+        ]);
+
+        // Attach recipe names
+        const recipeIds = transactions
+          .map((t) => t.recipeId)
+          .filter((id) => ObjectId.isValid(id))
+          .map((id) => new ObjectId(id));
+
+        const recipes = recipeIds.length
+          ? await recipesCollection
+            .find({ _id: { $in: recipeIds } })
+            .project({ recipeName: 1 })
+            .toArray()
+          : [];
+
+        const recipeMap = Object.fromEntries(
+          recipes.map((r) => [r._id.toString(), r.recipeName])
+        );
+
+        const enriched = transactions.map((t) => ({
+          ...t,
+          recipeName: recipeMap[t.recipeId] ?? "Deleted recipe",
+        }));
+
+        res.json({
+          transactions: enriched,
+          totalCount,
+          page,
+          totalPages: Math.ceil(totalCount / limit),
+        });
+      } catch (err) {
+        console.error("GET /admin/transactions error:", err);
+        res.status(500).json({ error: "Failed to fetch transactions" });
+      }
+    });
 
 
-    
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
